@@ -11,7 +11,7 @@ MEX=mex
 
 BINARY=mcxcl
 OUTPUT_DIR=../bin
-INCLUDEDIRS=
+INCLUDEDIRS=-Izmat -Izmat/easylzma -I/usr/local/cuda/include -Iubj
 
 CUCCOPT:=
 CCOPT=-g -pedantic -Wall -O3 -DMCX_EMBED_CL -DMCX_OPENCL -DUSE_OS_TIMER 
@@ -22,6 +22,9 @@ DLLFLAG=-fPIC
 OMP=-fopenmp
 OUTPUTFLAG:=-o
 XXD=xxd
+
+ZMATLIB    :=libzmat.a
+USERLINKOPT?=$(ZMATLIB) -lz
 
 # setup for amd
 AMDAPPSDKROOT ?=/opt/AMDAPPSDK-3.0
@@ -39,14 +42,16 @@ CUDA_PATH ?= /usr/local/cuda
 
 ifeq ($(findstring CYGWIN,$(PLATFORM)), CYGWIN)
   CUDA_LIB:="$(shell echo $$CUDA_PATH | sed 's:\\:/:g')"
+else ifeq ($(findstring MINGW64,$(PLATFORM)), MINGW64)
+  CUDA_LIB:="$(shell echo $$CUDA_PATH | sed 's:\\:/:g')"
 else
   CUDA_LIB:="$(shell echo $(CUDA_PATH) | sed 's:\\:/:g')"
 endif
 
 HAS_CUDA := $(shell [ -d $(CUDA_LIB) ] && echo "1" )
 ifeq ($(HAS_CUDA), 1)
-  CUCCOPT +=-I$(CUDA_LIB)/include -DUSE_OS_TIMER #-m32 -msse2 -Wfloat-equal -Wpointer-arith  -DATI_OS_LINUX -g3 -ffor-scope 
-  CCOPT += -I$(CUDA_LIB)/include -DUSE_OS_TIMER
+  CUCCOPT +=-DUSE_OS_TIMER #-m32 -msse2 -Wfloat-equal -Wpointer-arith  -DATI_OS_LINUX -g3 -ffor-scope 
+  CCOPT +=-DUSE_OS_TIMER
   LIBOPENCLDIR=$(CUDA_LIB)/lib64
   ifeq ($(findstring CYGWIN,$(PLATFORM)), CYGWIN)
      LIBOPENCLDIR=$(CUDA_LIB)/lib/x64
@@ -56,7 +61,7 @@ endif
 
 LIBOPENCLDIR ?= /usr/lib/x86_64-linux-gnu
 
-LIBOPENCL=-lOpenCL
+LIBOPENCL?=-lOpenCL
 
 OBJSUFFIX=.o
 EXESUFFIX=
@@ -66,20 +71,35 @@ MAKE       := make
 ECHO       := echo
 MKDIR      := mkdir
 
-FILES=mcx_host mcx_utils tictoc mcxcl mcx_shapes cjson/cJSON
+FILES=mcx_host mcx_utils tictoc mcxcl mcx_shapes cjson/cJSON ubj/ubjw
 CLPROGRAM=mcx_core
 
 ifeq ($(findstring CYGWIN,$(PLATFORM)), CYGWIN)
-  CCC=nvcc
-  LINKOPT=-L$(LIBOPENCLDIR) -lOpenCL
-  INCLUDEDIRS +=-I/c/CUDA/include
+  LINKOPT=-L$(LIBOPENCLDIR) $(LIBOPENCL) $(EXTRALIB)
+  INCLUDEDIRS +=-I"./mingw64/include"
   CPPOPT =-c  -D_CRT_SECURE_NO_DEPRECATE -DWIN32
-  OBJSUFFIX=.obj
+  CCOPT +=-D__USE_MINGW_ANSI_STDIO=1
+  OBJSUFFIX=.o
   EXESUFFIX=.exe
-  MEX=cmd /c mex
+  LIBOPENCL   ="c:\Windows\System32\OpenCL.dll"
+  MEXCCOPT+=-DMX_COMPAT_32
+  EXTRALIB   +=-static
+  MEX        :=cmd /c mex.bat -v -f mexopts_msys2_gcc.xml
   DLLFLAG=
+  ZMATLIB    :=zmat/zmatlib.obj zmat/lz4/lz4.obj zmat/lz4/lz4hc.obj zmat/easylzma/*.obj zmat/easylzma/pavlov/*.obj
+  USERLINKOPT:=$(ZMATLIB) -lz
+else ifeq ($(findstring MINGW64,$(PLATFORM)), MINGW64)
+  MW_MINGW64_LOC?=/c/msys64/usr
+  MEX        :=cmd //c mex.bat -f mexopts_msys2_gcc.xml
+  CCOPT +=-D__USE_MINGW_ANSI_STDIO=1
+  INCLUDEDIRS+=-I"./mingw64/include"
+  LIBOPENCL   ="c:\Windows\System32\OpenCL.dll"
+  LINKOPT=-L$(LIBOPENCLDIR) $(LIBOPENCL) $(EXTRALIB)
+  MEXCCOPT+=-DMX_COMPAT_32
+  EXTRALIB   +=-static
+  DLLFLAG    =
 else ifeq ($(findstring Darwin,$(PLATFORM)), Darwin)
-  INCLUDEDIRS=-I/System/Library/Frameworks/OpenCL.framework/Headers
+  INCLUDEDIRS+=-I/System/Library/Frameworks/OpenCL.framework/Headers
   LIBOPENCL=-framework OpenCL
   LIBOPENCLDIR=/System/Library/Frameworks/OpenCL.framework/Versions/A
   AR+=-g -L$(LIBOPENCLDIR) $(LIBOPENCL)
@@ -87,20 +107,24 @@ else
   LINKOPT=-g -L$(LIBOPENCLDIR) $(LIBOPENCL)
 endif
 
+ifeq ($(findstring x86_64,$(ARCH)), x86_64)
+  CCOPT  +=-m64
+  CPPOPT +=-m64
+endif
+
 all static: CUCCOPT+=
 
 mex:        AR=$(MEX)
-mex:        LINKOPT+= CXXFLAGS='$$CXXFLAGS -g -DMCX_CONTAINER  $(MEXCCOPT) $(USERCCOPT)' LDFLAGS='-L$$TMW_ROOT$$MATLABROOT/sys/os/$$ARCH $$LDFLAGS -g -L$(LIBOPENCLDIR) $(LIBOPENCL) $(USERLINKOPT)'
+mex:        LINKOPT= CXXFLAGS='$$CXXFLAGS -g -DMCX_CONTAINER $(CPPOPT) $(MEXCCOPT) $(USERCCOPT)' LDFLAGS='$$LDFLAGS -g ' COMPFLAGS='' DEFINES='' CXXLIBS='$$CXXLIBS -L$(LIBOPENCLDIR) $(LIBOPENCL)'
 mex oct:    OUTPUT_DIR=../mcxlabcl
 mex:        OUTPUTFLAG:=-output
 mex:        BINARY=mcxcl
 mex oct:    CUCCOPT+=$(DLLFLAG) -DMCX_CONTAINER
 mex oct:    CCOPT+=$(DLLFLAG) -DMCX_CONTAINER
-mex oct:    CPPOPT+=$(DLLFLAG) -DMCX_CONTAINER
 mex:        LINKOPT+=mcxlabcl.cpp -outdir $(OUTPUT_DIR) $(INCLUDEDIRS)
 
 oct:        BINARY=mcxcl.mex
-oct:        AR= CXXFLAGS='$(MEXCCOPT) $(USERCCOPT)' LFLAGS='-g -L$(LIBOPENCLDIR) $(LIBOPENCL) $(USERLINKOPT)' LDFLAGS='$(LFLAGS)' mkoctfile
+oct:        AR= CXXFLAGS='$(CPPOPT) $(MEXCCOPT) $(USERCCOPT)' LFLAGS='-g -L$(LIBOPENCLDIR) $(LIBOPENCL)' LDFLAGS='$(LFLAGS)' mkoctfile
 oct:        LINKOPT=--mex mcxlabcl.cpp $(INCLUDEDIRS)
 
 OBJS      := $(addsuffix $(OBJSUFFIX), $(FILES))
@@ -111,8 +135,8 @@ all mex oct intelcpu static : $(OUTPUT_DIR)/$(BINARY)
 makedirs:
 	@if test ! -d $(OUTPUT_DIR); then $(MKDIR) $(OUTPUT_DIR); fi
 
-$(OUTPUT_DIR)/$(BINARY): makedirs $(CLSOURCE) $(OBJS)
-	$(AR) $(OBJS) $(LINKOPT) $(OUTPUTFLAG) $(OUTPUT_DIR)/$(BINARY)
+$(OUTPUT_DIR)/$(BINARY): makedirs $(CLSOURCE) $(ZMATLIB) $(OBJS)
+	$(AR) $(OBJS) $(LINKOPT) $(OUTPUTFLAG) $(OUTPUT_DIR)/$(BINARY) $(USERLINKOPT)
 
 %$(CLHEADER): mcx_core.cl xxd %.cl
 	$(XXD) -i $(CLPROGRAM).cl | sed 's/\([0-9a-f]\)$$/\0, 0x00/' > $(CLPROGRAM).clh
@@ -128,8 +152,12 @@ intelcpu:
 
 static: LINKOPT:=-Wl,-Bstatic  -Wl,-Bdynamic -static-libgcc -static-libstdc++ $(LINKOPT) -Wl,-Bstatic -lm -Wl,-Bdynamic
 
+$(ZMATLIB):
+	-$(MAKE) -C zmat lib AR=ar CPPOPT="$(DLLFLAG)" CCOPT="$(DLLFLAG)" USERLINKOPT=
+
 clean:
-	-rm -f $(OBJS) $(CLSOURCE) $(OUTPUT_DIR)/$(BINARY)$(EXESUFFIX) $(OUTPUT_DIR)/$(BINARY)_atomic$(EXESUFFIX)
+	-$(MAKE) -C zmat clean
+	-rm -f $(OBJS) $(CLSOURCE) $(OUTPUT_DIR)/$(BINARY)$(EXESUFFIX) $(OUTPUT_DIR)/$(BINARY)_atomic$(EXESUFFIX) $(ZMATLIB)
 xxd:
 	@if [ -z `which ${XXD}` ]; then \
 	    echo "Please first install 'xxd' utility. For Ubuntu/Debian, use 'sudo apt-get install vim-common'; for Windows, please select xxd in cygwin64 installer."; exit 1;\
